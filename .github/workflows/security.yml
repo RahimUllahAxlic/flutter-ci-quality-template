@@ -1,0 +1,72 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1" # Mondays 03:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # scan history, not just the tip
+
+      # Free for personal accounts. Organisation-owned repos need a
+      # GITLEAKS_LICENSE secret; see docs/SECRETS.md for alternatives.
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Blocks PRs that introduce known-vulnerable dependencies.
+      # Requires the dependency graph to be enabled (default on public repos).
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  outdated:
+    name: Outdated dependency report
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Report outdated packages
+        run: |
+          {
+            echo "## Outdated dependencies"
+            echo
+            echo '```'
+            flutter pub outdated || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

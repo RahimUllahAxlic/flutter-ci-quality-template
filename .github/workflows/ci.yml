@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Lets release.yml reuse the exact same gates before publishing anything.
+  workflow_call:
+
+# A newer push to the same PR/branch supersedes the running one.
+# (Tag runs are never cancelled.)
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+# Least privilege by default; no job here needs more.
+permissions:
+  contents: read
+
+env:
+  COVERAGE_THRESHOLD: "80"
+
+jobs:
+  quality:
+    name: Format and analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter --version
+      - run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Static analysis (infos are failures)
+        run: flutter analyze --fatal-infos
+
+  test:
+    name: Unit and widget tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Run tests with coverage
+        run: >
+          flutter test --coverage
+          --file-reporter json:test-results.json
+
+      # Runs even when tests fail so the summary explains what broke.
+      - name: Publish test and coverage report
+        if: ${{ !cancelled() }}
+        run: >
+          python3 scripts/ci_report.py
+          --tests test-results.json
+          --lcov coverage/lcov.info
+          --min-coverage "$COVERAGE_THRESHOLD"
+
+      - name: Upload test results and coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            test-results.json
+            coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+
+  build-android:
+    name: Build Android (release APK)
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require platform folders
+        run: |
+          if [ ! -d android ]; then
+            echo "::error::android/ is missing. Run scripts/bootstrap.sh once and commit the result."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # No signing credentials are used or required. The APK is validated for
+      # buildability only and is NOT suitable for store distribution.
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  build-web:
+    name: Build web
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require platform folders
+        run: |
+          if [ ! -d web ]; then
+            echo "::error::web/ is missing. Run scripts/bootstrap.sh once and commit the result."
+            exit 1
+          fi
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter build web --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+          if-no-files-found: error
+          retention-days: 7

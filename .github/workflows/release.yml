@@ -1,0 +1,89 @@
+name: Release
+
+# Push a tag like v1.2.3 (or v1.2.3-rc.1) to publish a GitHub Release.
+# This workflow uses NO signing credentials: artifacts are for testing and
+# internal distribution, not for app-store upload. docs/SECRETS.md explains
+# how to add signing later without leaking it.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify-version:
+    name: Tag matches pubspec version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare tag with pubspec.yaml
+        env:
+          # Passed via env, never interpolated into the script: tag names may
+          # contain shell metacharacters.
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${TAG_NAME#v}"
+          pubspec_version="$(grep -E '^version:' pubspec.yaml | head -1 \
+            | sed -E 's/^version:[[:space:]]*//; s/\+.*$//')"
+          if [ "$tag_version" != "$pubspec_version" ]; then
+            echo "::error::Tag '$TAG_NAME' does not match pubspec version '$pubspec_version'"
+            exit 1
+          fi
+
+  # Reuse the exact PR gates: format, analyze, tests, coverage, builds.
+  ci:
+    name: CI gates
+    needs: verify-version
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish GitHub Release
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the only job that can write to the repo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: dist/android
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: dist/web
+
+      - name: Package artifacts and checksums
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          mkdir release
+          cp dist/android/app-release.apk "release/app-${version}-android.apk"
+          (cd dist/web && zip -qr "../../release/app-${version}-web.zip" .)
+          (cd release && sha256sum app-* > SHA256SUMS.txt)
+          cat release/SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          # v1.2.3-rc.1 and friends are marked as pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            > **Unsigned build.** Android APK uses the default debug key and is
+            > intended for testing, not store distribution. Verify downloads
+            > against `SHA256SUMS.txt`.

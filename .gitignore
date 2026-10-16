@@ -1,0 +1,29 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+test-results.json
+*.log
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.swp
+.DS_Store
+
+# Secrets and signing material: never commit these
+*.jks
+*.keystore
+*.p12
+*.pem
+*.mobileprovision
+**/key.properties
+.env
+.env.*
+!.env.example
