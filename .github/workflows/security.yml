@@ -27,7 +27,7 @@ jobs:
 
       # Free for personal accounts. Organisation-owned repos need a
       # GITLEAKS_LICENSE secret; see docs/SECRETS.md for alternatives.
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
